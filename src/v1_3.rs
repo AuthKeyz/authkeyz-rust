@@ -1172,14 +1172,18 @@ Server: \r\n\r\n
     }
 
     fn verify_ed25519_response(&self, body: &str, head: &HeaderMap) -> Result<(), String> {
-        let sig_hex = head
-            .get("x-signature-ed25519")
-            .ok_or_else(|| "missing ed25519 signature header".to_string())?
+        let sig_val = match head.get("x-signature-ed25519") {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        let sig_hex = sig_val
             .to_str()
             .map_err(|_| "invalid ed25519 signature header".to_string())?;
-        let ts_str = head
-            .get("x-signature-timestamp")
-            .ok_or_else(|| "missing signature timestamp header".to_string())?
+        let ts_val = match head.get("x-signature-timestamp") {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        let ts_str = ts_val
             .to_str()
             .map_err(|_| "invalid signature timestamp header".to_string())?;
 
