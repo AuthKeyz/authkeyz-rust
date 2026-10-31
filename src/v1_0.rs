@@ -1,0 +1,687 @@
+/*!
+unofficial [authkeyz](https://authkeyz.bond) library that uses 1.0 api version
+
+basic usage:
+```no_run
+use authkeyz::v1_0::AuthKeyzApi;
+
+let mut auth = AuthKeyzApi::new(
+    "application name",
+    "ownerid",
+    "application secret",
+    "application version",
+    "https://authkeyz.bond/api/1.0/",
+);
+auth.init(None).unwrap();
+auth.login(
+    "username".to_string(),
+    "password".to_string(),
+    Some("hwid".to_string()),
+)
+.unwrap();
+```
+
+also if you want to use an obfuscator for rust i recommend using [obfstr](https://crates.io/crates/obfstr) and [llvm obfuscator](https://github.com/eshard/obfuscator-llvm/wiki/Rust-obfuscation-guide)
+*/
+
+use uuid::Uuid;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::time::{Duration, SystemTime};
+use reqwest::blocking::Client;
+use reqwest::blocking::Response;
+use reqwest::header::{HeaderMap, DATE};
+use base16::{decode, encode_lower};
+
+use sha256::digest;
+use aes::Aes256;
+use block_modes::block_padding::Pkcs7;
+use block_modes::{BlockMode, Cbc};
+
+type Aes256Cbc = Cbc<Aes256, Pkcs7>;
+
+/// every function in this struct (accept log) returns a Result and Err("Request was tampered with") will be returned if the request signature doesnt mathc the sha256 hmac of the message
+#[derive(Debug, Clone)]
+pub struct AuthKeyzApi {
+    name: String,
+    owner_id: String,
+    secret: String,
+    version: String,
+    enckey: String,
+    session_id: String,
+    pub api_url: String,
+    pub num_keys: String,
+    pub num_online_users: String,
+    pub num_users: String,
+    pub app_version: String,
+    pub customer_panel_link: String,
+    pub username: String,
+    pub ip: String,
+    pub hwid: String,
+    pub create_date: String,
+    pub last_login: String,
+    pub subscription: String,
+    pub message: String,
+    pub success: bool,
+    pub blacklisted: bool,
+    pub response: String,
+    pub time_check_enabled: bool,
+    pub max_time_drift_secs: u64,
+    server_time_utc: RefCell<Option<SystemTime>>,
+    local_time_at_server_time: RefCell<Option<SystemTime>>,
+}
+
+impl AuthKeyzApi {
+    /// creats a new AuthKeyzApi and its defaults, api_url has to be api version 1.2 example: "https://authkeyz.bond/api/1.2/" or if you have a custom api domain: "https://api.example.com/1.2/"
+    pub fn new(name: &str, owner_id: &str, secret: &str, version: &str, api_url: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            owner_id: owner_id.to_string(),
+            secret: secret.to_string(),
+            version: version.to_string(),
+            enckey: String::new(),
+            session_id: String::new(),
+            num_keys: String::new(),
+            api_url: api_url.to_string(),
+            num_online_users: String::new(),
+            num_users: String::new(),
+            app_version: version.to_string(),
+            customer_panel_link: String::new(),
+            username: String::new(),
+            ip: String::new(),
+            hwid: machine_uuid::get(),
+            create_date: String::new(),
+            last_login: String::new(),
+            subscription: String::new(),
+            message: String::new(),
+            success: false,
+            blacklisted: false,
+            response: String::new(),
+            time_check_enabled: true,
+            max_time_drift_secs: 300,
+            server_time_utc: RefCell::new(None),
+            local_time_at_server_time: RefCell::new(None),
+        }
+    }
+
+    /// initializes a session, **required to run before any other function in this struct!!!** accept new
+    pub fn init(&mut self, hash: Option<&str>) -> Result<(), String> {
+        let init_iv = Self::gen_init_iv();
+        self.enckey = Self::gen_init_iv();
+
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"init"));
+        if let Some(hash) = hash {
+            req_data.insert("hash", Encryption::encrypt(hash, &self.secret, &init_iv));
+        }
+        req_data.insert("ver", Encryption::encrypt(&self.version, &self.secret, &init_iv));
+        req_data.insert("name", encode_lower(&self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(&self.owner_id.as_bytes()));
+        req_data.insert("enckey", Encryption::encrypt(&self.enckey, &self.secret, &init_iv));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.secret, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        if json_rep["success"].as_bool().unwrap() {
+            self.session_id = json_rep["sessionid"].as_str().unwrap().to_string();
+            self.num_keys = json_rep["appinfo"]["numKeys"].as_str().unwrap().to_string();
+            self.num_online_users = json_rep["appinfo"]["numOnlineUsers"].as_str().unwrap().to_string();
+            self.num_users = json_rep["appinfo"]["numUsers"].as_str().unwrap().to_string();
+            self.customer_panel_link = json_rep["appinfo"]["customerPanelLink"].as_str().unwrap_or("").to_string();
+            Ok(())
+        } else {
+            if json_rep["message"].as_str().unwrap() == "invalidver" {
+                let download_url = json_rep["download"].as_str().unwrap();
+                if !download_url.is_empty() {
+                    webbrowser::open(download_url).unwrap();
+                }
+            }
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// registeres a new user
+    pub fn register(&mut self, username: String, password: String, license: String, hwid: Option<String>) -> Result<(), String> {
+        let init_iv = Self::gen_init_iv();
+
+        let hwidd = match hwid {
+            Some(hwid) => hwid,
+            None => machine_uuid::get(),
+        };
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"register"));
+        req_data.insert("username", Encryption::encrypt(&username, &self.enckey, &init_iv));
+        req_data.insert("pass", Encryption::encrypt(&password, &self.enckey, &init_iv));
+        req_data.insert("key", Encryption::encrypt(&license, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("hwid", Encryption::encrypt(&hwidd, &self.enckey, &init_iv));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        if json_rep["success"].as_bool().unwrap() {
+            self.username = username;
+            self.ip = json_rep["info"]["ip"].as_str().unwrap().to_string();
+            self.create_date = json_rep["info"]["createdate"].as_str().unwrap().to_string();
+            self.last_login = json_rep["info"]["lastlogin"].as_str().unwrap().to_string();
+            self.subscription = json_rep["info"]["subscriptions"][0]["subscription"].as_str().unwrap().to_string();
+            Ok(())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// upgrades a user license level or extends a license
+    pub fn upgrade(&mut self, username: String, license: String) -> Result<(), String> {
+        let init_iv = Self::gen_init_iv();
+
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"upgrade"));
+        req_data.insert("username", Encryption::encrypt(&username, &self.enckey, &init_iv));
+        req_data.insert("key", Encryption::encrypt(&license, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        if json_rep["success"].as_bool().unwrap() {
+            Ok(())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// login self explanatory
+    pub fn login(&mut self, username: String, password: String, hwid: Option<String>) -> Result<(), String> {
+        let init_iv = Self::gen_init_iv();
+        let hwidd = match hwid {
+            Some(hwid) => hwid,
+            None => machine_uuid::get(),
+        };
+        self.hwid = hwidd.clone();
+
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"login"));
+        req_data.insert("username", Encryption::encrypt(&username, &self.enckey, &init_iv));
+        req_data.insert("pass", Encryption::encrypt(&password, &self.enckey, &init_iv));
+        req_data.insert("hwid", Encryption::encrypt(&hwidd, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            self.username = username;
+            self.ip = json_rep["info"]["ip"].as_str().unwrap().to_string();
+            self.hwid = hwidd;
+            self.create_date = json_rep["info"]["createdate"].as_str().unwrap().to_string();
+            self.last_login = json_rep["info"]["lastlogin"].as_str().unwrap().to_string();
+            self.subscription = json_rep["info"]["subscriptions"][0]["subscription"].as_str().unwrap().to_string();
+            Ok(())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// <https://docs.authkeyz.bond/api/license>
+    pub fn license(&mut self, license: String, hwid: Option<String>) -> Result<(), String> {
+        let init_iv = Self::gen_init_iv();
+        let hwidd = match hwid {
+            Some(hwid) => hwid,
+            None => machine_uuid::get(),
+        };
+
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"license"));
+        req_data.insert("key", Encryption::encrypt(&license, &self.enckey, &init_iv));
+        req_data.insert("hwid", Encryption::encrypt(&hwidd, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            self.username = json_rep["info"]["username"].as_str().unwrap().to_string();
+            self.ip = json_rep["info"]["ip"].as_str().unwrap().to_string();
+            self.hwid = hwidd;
+            self.create_date = json_rep["info"]["createdate"].as_str().unwrap().to_string();
+            self.last_login = json_rep["info"]["lastlogin"].as_str().unwrap().to_string();
+            self.subscription = json_rep["info"]["subscriptions"][0]["subscription"].as_str().unwrap().to_string();
+            Ok(())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// this will get a global variable (not user) and return it
+    pub fn var(&mut self, varid: String) -> Result<String, String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"var"));
+        req_data.insert("varid", Encryption::encrypt(&varid, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            Ok(json_rep["message"].as_str().unwrap().to_string())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// downloads a file, and decodes using base16::decode
+    pub fn file(&mut self, fileid: String) -> Result<Vec<u8>, String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"file"));
+        req_data.insert("fileid", Encryption::encrypt(&fileid, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            Ok(decode(json_rep["contents"].as_str().unwrap()).unwrap())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// sends a webhook from authkeyz's servers so the url isnt exposed
+    pub fn webhook(&mut self, webid: String, params: String) -> Result<String, String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"webhook"));
+        req_data.insert("webid", Encryption::encrypt(&webid, &self.enckey, &init_iv));
+        req_data.insert("params", Encryption::encrypt(&params, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            Ok(json_rep["message"].as_str().unwrap().to_string())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// checks if the user is blacklisted and sets self.blacklisted acordingly
+    pub fn checkblacklist(&mut self) -> Result<(), String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"checkblacklist"));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("hwid", Encryption::encrypt(&self.hwid, &self.enckey, &init_iv));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            self.blacklisted = true;
+            Ok(())
+        } else {
+            self.blacklisted = false;
+            Ok(())
+        }
+    }
+
+    /// checks if the session is still active or if it expired
+    pub fn check_session(&mut self) -> Result<bool, String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"check"));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        Ok(json_rep["success"].as_bool().unwrap())
+    }
+
+    /// gets json of online users
+    pub fn fetch_online(&mut self) -> Result<serde_json::Value, String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"fetchOnline"));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            Ok(json_rep["users"].clone())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// gets the arry of messages in a channel
+    pub fn get_chat(&mut self, channel: String) -> Result<serde_json::Value, String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"chatget"));
+        req_data.insert("channel", Encryption::encrypt(&channel, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            Ok(json_rep["messages"].clone())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// sends a chat message in a channel
+    pub fn send_chat_message(&mut self, channel: String, message: String) -> Result<(), String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"chatsend"));
+        req_data.insert("channel", Encryption::encrypt(&channel, &self.enckey, &init_iv));
+        req_data.insert("message", Encryption::encrypt(&message, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            Ok(())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// self explanatory
+    pub fn ban(&mut self) {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"ban"));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let _ = self.request(req_data, self.api_url.clone());
+    }
+
+    /// sets a user variable to varvalue
+    pub fn setvar(&mut self, varname: String, varvalue: String) -> Result<(), String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"setvar"));
+        req_data.insert("var", Encryption::encrypt(&varname, &self.enckey, &init_iv));
+        req_data.insert("data", Encryption::encrypt(&varvalue, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        self.message = json_rep["message"].as_str().unwrap().to_string();
+        self.success = json_rep["success"].as_bool().unwrap();
+        Ok(())
+    }
+
+    /// gets a user variable
+    pub fn getvar(&mut self, varname: String) -> Result<String, String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"getvar"));
+        req_data.insert("var", Encryption::encrypt(&varname, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            Ok(json_rep["response"].as_str().unwrap().to_string())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    /// logs somethink to authkeyz
+    pub fn log(&mut self, message: String, pcuser: Option<String>) {
+        let init_iv = Self::gen_init_iv();
+        let usr = match pcuser {
+            Some(pcuser) => pcuser,
+            None => self.username.clone(),
+        };
+
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"log"));
+        req_data.insert("message", Encryption::encrypt(&message, &self.enckey, &init_iv));
+        req_data.insert("pcuser", Encryption::encrypt(&usr, &self.enckey, &init_iv));
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let _ = self.request(req_data, self.api_url.clone());
+    }
+
+    /// changes Username, 
+    pub fn change_username(&mut self, new_username: String) -> Result<String, String> {
+        let init_iv = Self::gen_init_iv();
+        let mut req_data = HashMap::new();
+        req_data.insert("type", encode_lower(b"changeUsername"));
+        req_data.insert("newUsername", new_username);
+        req_data.insert("sessionid", encode_lower(self.session_id.as_bytes()));
+        req_data.insert("name", encode_lower(self.name.as_bytes()));
+        req_data.insert("ownerid", encode_lower(self.owner_id.as_bytes()));
+        req_data.insert("init_iv", init_iv.to_string());
+
+        let req = self.request(req_data, self.api_url.clone())?;
+        let resp = req.text().unwrap();
+
+        let resp = Encryption::decrypt(resp, &self.enckey, &init_iv);
+        let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        if json_rep["success"].as_bool().unwrap() {
+            Ok(json_rep["message"].as_str().unwrap().to_string())
+        } else {
+            Err(json_rep["message"].as_str().unwrap().to_string())
+        }
+    }
+
+    fn update_time_from_headers(&self, headers: &HeaderMap) -> Result<(), String> {
+        if !self.time_check_enabled {
+            return Ok(());
+        }
+        let date_value = match headers.get(DATE) {
+            Some(value) => value,
+            None => return Ok(()),
+        };
+        let date_str = date_value
+            .to_str()
+            .map_err(|_| "invalid Date header".to_string())?;
+        let server_time =
+            httpdate::parse_http_date(date_str).map_err(|_| "invalid Date header".to_string())?;
+        let now = SystemTime::now();
+
+        let last_local = *self.local_time_at_server_time.borrow();
+        if let Some(last_local) = last_local {
+            if now.duration_since(last_local).is_err() {
+                return Err("system clock moved backwards; possible time tampering".to_string());
+            }
+        }
+
+        let last_server = *self.server_time_utc.borrow();
+        let last_local = *self.local_time_at_server_time.borrow();
+        if let (Some(last_server), Some(last_local)) = (last_server, last_local) {
+            let elapsed = now
+                .duration_since(last_local)
+                .unwrap_or(Duration::from_secs(0));
+            let expected_server = last_server + elapsed;
+            let drift = if server_time >= expected_server {
+                server_time
+                    .duration_since(expected_server)
+                    .unwrap_or(Duration::from_secs(0))
+            } else {
+                expected_server
+                    .duration_since(server_time)
+                    .unwrap_or(Duration::from_secs(0))
+            };
+            if drift.as_secs() > self.max_time_drift_secs {
+                return Err(
+                    "system clock is out of sync with server time; possible time tampering"
+                        .to_string(),
+                );
+            }
+        }
+
+        *self.server_time_utc.borrow_mut() = Some(server_time);
+        *self.local_time_at_server_time.borrow_mut() = Some(now);
+        Ok(())
+    }
+
+    fn request(&self, req_data: HashMap<&str, String>, url: String) -> Result<Response, String> {
+        let client = Client::new();
+        let mut req_data_str = String::new();
+        for d in req_data {
+            req_data_str.push_str(&format!("{}={}&", d.0, d.1))
+        }
+        req_data_str = req_data_str.strip_suffix("&").unwrap().to_string();
+        let resp = client.post(url)
+            .body(req_data_str)
+            .header("User-Agent", "AuthKeyz")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .send()
+            .map_err(|err| err.to_string())?;
+        self.update_time_from_headers(resp.headers())?;
+        Ok(resp)
+    }
+
+    fn gen_init_iv() -> String {
+        let session_iv = Uuid::new_v4().to_string()[..8].to_string();
+        digest(session_iv.as_bytes())
+    }
+}
+
+struct Encryption;
+impl Encryption {
+    fn encrypt_string(plain_text: &[u8], key: &[u8], iv: &[u8]) -> String {
+        let mut buffer = [0u8; 128];
+        let pos = plain_text.len();
+        buffer[..pos].copy_from_slice(plain_text);
+        let cipher = Aes256Cbc::new_from_slices(key, iv).unwrap();
+        let ciphertext = cipher.encrypt(&mut buffer, pos).unwrap();
+        encode_lower(ciphertext)
+    }
+
+    fn decrypt_string(cipher_text: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
+        let cipher_text = decode(cipher_text).unwrap();
+        let cipher = Aes256Cbc::new_from_slices(key, iv).unwrap();
+        cipher.decrypt_vec(&cipher_text).unwrap()
+    }
+
+    fn encrypt(message: &str, enc_key: &str, iv: &str) -> String {
+        let hasher = sha256::digest(enc_key.as_bytes());
+        let key: String = hasher[..32].to_owned();
+
+        let hasher = sha256::digest(iv.as_bytes());
+        let iv: String = hasher[..16].to_owned();
+        Encryption::encrypt_string(message.as_bytes(), key.as_bytes(), iv.as_bytes())
+    }
+
+    fn decrypt(message: String, enc_key: &str, iv: &str) -> String {
+        let hasher = sha256::digest(enc_key.as_bytes());
+        let key: String = hasher[..32].to_owned();
+
+        let hasher = sha256::digest(iv.as_bytes());
+        let iv: String = hasher[..16].to_owned();
+        String::from_utf8(Encryption::decrypt_string(
+            message.as_bytes(),
+            key.as_bytes(),
+            iv.as_bytes(),
+        ))
+            .unwrap()
+    }
+}
