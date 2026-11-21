@@ -1200,7 +1200,7 @@ Server: \r\n\r\n
         }
 
         const PUBLIC_KEY_HEX: &str =
-            "5586b4bc69c7a4b487e4563a4cd96afd39140f919bd31cea7d1c6a1e8439422b";
+            "8e8d104f3ce9b29b411cfcf8e049d19fed42e63caa275e111bfa71ef3d237041";
         let public_key_bytes = hex::decode(PUBLIC_KEY_HEX)
             .map_err(|_| "invalid public key hex".to_string())?;
         let public_key = VerifyingKey::from_bytes(
