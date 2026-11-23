@@ -26,7 +26,7 @@ also if you want to use an obfuscator for rust i recommend using [obfstr](https:
 
 use uuid::Uuid;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 use std::time::UNIX_EPOCH;
 use reqwest::blocking::Client;
@@ -71,6 +71,7 @@ pub struct AuthKeyzApi {
     server_time_utc: RefCell<Option<SystemTime>>,
     local_time_at_server_time: RefCell<Option<SystemTime>>,
     allowed_hosts: Vec<String>,
+    seen_signatures: RefCell<HashSet<String>>,
 }
 
 impl AuthKeyzApi {
@@ -107,6 +108,7 @@ impl AuthKeyzApi {
             server_time_utc: RefCell::new(None),
             local_time_at_server_time: RefCell::new(None),
             allowed_hosts: Vec::new(),
+            seen_signatures: RefCell::new(HashSet::new()),
         }
     }
 
@@ -144,7 +146,8 @@ impl AuthKeyzApi {
         if resp == "AuthKeyz_Invalid" {
             return Err("The application doesn't exist".to_string());
         }
-        if !head.contains_key("signature") {
+        self.verify_ed25519_response(&resp, &head)?;
+        if !head.contains_key("x-signature-ed25519") && !head.contains_key("signature") {
             #[cfg(feature = "panic")]
             {
                 panic!("response was tampered with");
@@ -154,8 +157,9 @@ impl AuthKeyzApi {
                 return Err("response was tampered with".to_string());
             }
         }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.secret) {
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.secret) {
             #[cfg(feature = "panic")]
             {
                 panic!("response was tampered with");
@@ -164,6 +168,7 @@ impl AuthKeyzApi {
             {
                 return Err("response was tampered with".to_string());
             }
+        }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
         if json_rep["success"].as_bool().unwrap() {
@@ -205,26 +210,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -257,26 +263,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -308,26 +315,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -367,26 +375,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -420,26 +429,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -465,26 +475,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -511,26 +522,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -555,26 +567,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -601,26 +614,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -641,26 +655,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -686,26 +701,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -732,26 +748,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -789,26 +806,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -832,26 +850,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -895,26 +914,27 @@ impl AuthKeyzApi {
         let resp = req.text().unwrap();
 
         self.verify_ed25519_response(&resp, &head)?;
-
-        if !head.contains_key("signature") {
-            #[cfg(feature = "panic")]
-            {
-                panic!("response was tampered with");
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
+                }
             }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("response was tampered with".to_string());
-            }
-        }
-        let sig = head.get("signature").unwrap().to_str().unwrap();
-        if sig != Self::make_hmac(&resp, &self.enckey_s) {
-            #[cfg(feature = "panic")]
-            {
-                panic!("Response was tampered with");
-            }
-            #[cfg(not(feature = "panic"))]
-            {
-                return Err("Response was tampered with".to_string());
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
             }
         }
         let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
@@ -973,28 +993,29 @@ impl AuthKeyzApi {
                 let resp = req.text().unwrap();
 
                 self.verify_ed25519_response(&resp, &head)?;
-
-                if !head.contains_key("signature") {
-                    #[cfg(feature = "panic")]
-                    {
-                        panic!("response was tampered with");
-                    }
-                    #[cfg(not(feature = "panic"))]
-                    {
-                        return Err("response was tampered with".to_string());
-                    }
+        if !head.contains_key("x-signature-ed25519") && !self.secret.is_empty() {
+            if !head.contains_key("signature") {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("response was tampered with");
                 }
-                let sig = head.get("signature").unwrap().to_str().unwrap();
-                if sig != Self::make_hmac(&resp, &self.enckey_s) {
-                    #[cfg(feature = "panic")]
-                    {
-                        panic!("Response was tampered with");
-                    }
-                    #[cfg(not(feature = "panic"))]
-                    {
-                        return Err("Response was tampered with".to_string());
-                    }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("response was tampered with".to_string());
                 }
+            }
+            let sig = head.get("signature").unwrap().to_str().unwrap();
+            if sig != Self::make_hmac(&resp, &self.enckey_s) {
+                #[cfg(feature = "panic")]
+                {
+                    panic!("Response was tampered with");
+                }
+                #[cfg(not(feature = "panic"))]
+                {
+                    return Err("Response was tampered with".to_string());
+                }
+            }
+        }
                 let json_rep: serde_json::Value = serde_json::from_str(&resp).unwrap();
                 let (status, body) = if json_rep["success"].as_bool().unwrap() {
                     self.username = user.to_string();
@@ -1132,7 +1153,7 @@ Server: \r\n\r\n
             .map_err(|err| err.to_string())?;
         let mut req_data_str = String::new();
         for d in req_data {
-            req_data_str.push_str(&format!("{}={}&", d.0, d.1))
+            req_data_str.push_str(&format!("{}={}&", Self::url_encode(d.0), Self::url_encode(d.1)))
         }
         req_data_str = req_data_str.strip_suffix("&").unwrap().to_string();
         let resp = client
@@ -1195,8 +1216,13 @@ Server: \r\n\r\n
             .map_err(|_| "invalid system time".to_string())?
             .as_secs() as i64;
         let drift = (now - ts).abs();
-        if drift > 30 {
+        if drift > self.max_time_drift_secs as i64 {
             return Err("signature timestamp drift too large".to_string());
+        }
+
+        let sig_fingerprint = format!("{}:{}", ts_str.trim(), sig_hex.trim().to_ascii_lowercase());
+        if self.seen_signatures.borrow().contains(&sig_fingerprint) {
+            return Err("replay attack detected: duplicate ed25519 signature".to_string());
         }
 
         const PUBLIC_KEY_HEX: &str =
@@ -1224,7 +1250,28 @@ Server: \r\n\r\n
             .verify(&message, &signature)
             .map_err(|_| "ed25519 signature verification failed".to_string())?;
 
+        self.seen_signatures.borrow_mut().insert(sig_fingerprint);
+
+        if let Ok(env) = serde_json::from_str::<serde_json::Value>(body) {
+            if let Some(resp_owner) = env.get("ownerid").and_then(|v| v.as_str()) {
+                if !resp_owner.is_empty() && resp_owner != self.owner_id {
+                    return Err("API response ownerid does not match configured application".to_string());
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    fn url_encode(input: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        for b in input.bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+                _ => out.push_str(&format!("%{:02X}", b)),
+            }
+        }
+        out
     }
 
     fn make_hmac(message: &str, key: &str) -> String {
